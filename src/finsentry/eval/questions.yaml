@@ -1,0 +1,130 @@
+# FinSentry 15-question analyst eval.
+#
+# KNOWN answers below were computed INDEPENDENTLY of the analyst agent - by
+# hand-written ground-truth SQL run directly against the warehouse (see
+# `ground_truth_sql`), NOT by calling the analyst's own tools. This avoids
+# circularity: the agent must arrive at the same value via its own tool loop.
+#
+# match types:
+#   money       - any number in the answer within relative `tolerance` of `expected`
+#   number      - same as money (non-currency float)
+#   count       - any number in the answer equals `expected` exactly
+#   date        - the ISO date `expected` appears in the answer
+#   categorical - the string `expected` appears in the answer (case-insensitive)
+#   chart       - a chart PNG was produced AND the underlying `expected` value
+#                 appears in the answer within `tolerance`
+#
+# The mix spans SQL facts, two anomaly-check questions (q08, q09) and one chart
+# request (q14), as required.
+
+questions:
+  - id: q01
+    question: "What was the total billed cost in March 2025?"
+    match: money
+    expected: 3247663.99
+    tolerance: 0.001
+    ground_truth_sql: "SELECT round(sum(total_billed_cost),2) FROM analytics.fct_daily_revenue WHERE date BETWEEN '2025-03-01' AND '2025-03-31'"
+    note: "Monthly sum of billed cost."
+
+  - id: q02
+    question: "Which day had the highest revenue (total billed cost)?"
+    match: date
+    expected: "2025-07-22"
+    ground_truth_sql: "SELECT date FROM analytics.fct_daily_revenue ORDER BY total_billed_cost DESC LIMIT 1"
+    note: "Highest-revenue day = planted price-list double-billing spike."
+
+  - id: q03
+    question: "What was the total recognized revenue in Q4 2025?"
+    match: money
+    expected: 10336802.86
+    tolerance: 0.001
+    ground_truth_sql: "SELECT round(sum(recognized_revenue),2) FROM analytics.fct_daily_revenue WHERE date BETWEEN '2025-10-01' AND '2025-12-31'"
+    note: "Quarterly ledger total."
+
+  - id: q04
+    question: "How many reconciliation breaks occurred in 2025?"
+    match: count
+    expected: 3
+    ground_truth_sql: "SELECT count(*) FROM analytics.mart_daily_health WHERE recon_breach"
+    note: "Days where ledger diverged from billing beyond tolerance."
+
+  - id: q05
+    question: "What was the date of the largest reconciliation break?"
+    match: date
+    expected: "2025-12-03"
+    ground_truth_sql: "SELECT date FROM analytics.fct_daily_revenue ORDER BY recon_abs_diff DESC LIMIT 1"
+    note: "Largest by absolute ledger-vs-billing difference (+12%)."
+
+  - id: q06
+    question: "What was the average daily active accounts across the whole year?"
+    match: number
+    expected: 3314.48
+    tolerance: 0.001
+    ground_truth_sql: "SELECT round(avg(total_active_accounts),2) FROM analytics.fct_daily_consumption"
+    note: "Mean of daily total active accounts."
+
+  - id: q07
+    question: "Which service had the highest total billed cost?"
+    match: categorical
+    expected: "compute"
+    ground_truth_sql: "SELECT service FROM analytics.fct_service_daily GROUP BY service ORDER BY sum(billed_cost) DESC LIMIT 1"
+    note: "Top service by billed cost."
+
+  - id: q08
+    question: "How many revenue anomalies did the anomaly detector flag?"
+    match: count
+    expected: 14
+    ground_truth_sql: null
+    note: "detect_all any_flag count for metric=revenue (robust MAD + Isolation Forest)."
+
+  - id: q09
+    question: "How many consumption anomalies did the anomaly detector flag?"
+    match: count
+    expected: 13
+    ground_truth_sql: null
+    note: "detect_all any_flag count for metric=consumption."
+
+  - id: q10
+    question: "What were the total consumption units on 2025-03-19?"
+    match: number
+    expected: 973089.40
+    tolerance: 0.001
+    ground_truth_sql: "SELECT round(total_consumption_units,2) FROM analytics.fct_daily_consumption WHERE date='2025-03-19'"
+    note: "Single-day consumption (planted batch-backfill outlier)."
+
+  - id: q11
+    question: "Which day had the lowest revenue (total billed cost)?"
+    match: date
+    expected: "2025-04-07"
+    ground_truth_sql: "SELECT date FROM analytics.fct_daily_revenue ORDER BY total_billed_cost ASC LIMIT 1"
+    note: "Lowest-revenue day = planted regional-outage drop."
+
+  - id: q12
+    question: "What was the average daily billed cost over the whole year?"
+    match: money
+    expected: 108215.97
+    tolerance: 0.001
+    ground_truth_sql: "SELECT round(avg(total_billed_cost),2) FROM analytics.fct_daily_revenue"
+    note: "Mean of daily billed cost."
+
+  - id: q13
+    question: "Which month had the highest total billed cost?"
+    match: categorical
+    expected: "2025-12"
+    ground_truth_sql: "SELECT strftime(date,'%Y-%m') FROM analytics.fct_daily_revenue GROUP BY 1 ORDER BY sum(total_billed_cost) DESC LIMIT 1"
+    note: "Month with the largest billed total (year-end push)."
+
+  - id: q14
+    question: "Create a chart of daily revenue for December 2025."
+    match: chart
+    expected: 3550309.62
+    tolerance: 0.001
+    ground_truth_sql: "SELECT round(sum(total_billed_cost),2) FROM analytics.fct_daily_revenue WHERE date BETWEEN '2025-12-01' AND '2025-12-31'"
+    note: "Scored on chart produced + correct underlying December total."
+
+  - id: q15
+    question: "How many reconciliation breaks exceeded 10%?"
+    match: count
+    expected: 1
+    ground_truth_sql: "SELECT count(*) FROM analytics.mart_daily_health WHERE recon_breach AND abs(recon_pct_diff) > 0.10"
+    note: "Only the 2025-12-03 break (+12%) exceeds 10%."

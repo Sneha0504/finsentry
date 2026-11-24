@@ -1,0 +1,18 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    description: >
+      Raw SYNTHETIC landing tables loaded by `python -m finsentry.load_raw`.
+      Freshness-agnostic: this is a fixed-seed, bounded synthetic dataset with no
+      wall-clock component, so no freshness windows are declared.
+    tables:
+      - name: billing_line_items
+        description: "Source A - granular cloud billing line items (one row per date/service/region/resource)."
+      - name: revenue_ledger
+        description: "Source B - daily GL revenue ledger (one row per date/product_line). Reconciles to billing within tolerance except on planted recon_break days."
+      - name: consumption
+        description: "Daily metered consumption (one row per date/service)."
+      - name: anomaly_labels
+        description: "Ground-truth planted-anomaly labels (date, metric, anomaly_type, severity, magnitude, note)."

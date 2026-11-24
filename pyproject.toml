@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "finsentry"
+version = "0.1.0"
+description = "FinSentry - Finance Data Quality Monitoring & AI Analyst (local DuckDB, Snowflake-ready)"
+readme = "PROJECT.md"
+requires-python = ">=3.11,<3.13"  # numpy==1.26.4 ships no cp313 wheels
+authors = [{ name = "Sneha Mishra" }]
+
+# Runtime dependencies are pinned in requirements.txt (and requirements-airflow.txt).
+# This project file exists so `pip install -e .` makes the `finsentry` package importable.
+dependencies = []
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

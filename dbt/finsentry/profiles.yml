@@ -1,0 +1,18 @@
+# dbt profile for FinSentry (dbt-duckdb). Kept inside the project dir and passed
+# to dbt via --profiles-dir. Snowflake-ready: swap this 'duckdb' output for a
+# 'snowflake' output with the same schema names and the models run unchanged.
+#
+# The DuckDB file path resolves against the process working directory, so ALWAYS
+# invoke dbt from the repo root (see airflow/README.md and pipeline_runner.py).
+# FINSENTRY_DUCKDB can override it with an absolute path (the Airflow deploy sets it).
+finsentry:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('FINSENTRY_DUCKDB', 'data/warehouse.duckdb') }}"
+      schema: analytics
+      # threads=1: DuckDB is a single-file embedded engine; multi-threaded dbt runs
+      # can hit an intermittent GIL/thread-teardown crash in the duckdb driver.
+      # The dataset is tiny so single-threaded is both deterministic and fast.
+      threads: 1

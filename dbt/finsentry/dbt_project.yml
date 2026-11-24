@@ -1,0 +1,33 @@
+name: 'finsentry'
+version: '1.0.0'
+config-version: 2
+
+# This profile is defined in the profiles.yml kept inside this project dir.
+# Invoke dbt from the repo root with --project-dir / --profiles-dir (see README).
+profile: 'finsentry'
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+seed-paths: ["seeds"]
+snapshot-paths: ["snapshots"]
+analysis-paths: ["analyses"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Reconciliation tolerance (fractional). Used by mart_daily_health's recon flag
+# AND by tests/assert_revenue_reconciliation.sql. Override with: --vars '{recon_tolerance_pct: 0.02}'
+vars:
+  recon_tolerance_pct: 0.01
+
+models:
+  finsentry:
+    # Models land in the target schema ('analytics'), reading from the existing
+    # 'raw' schema via dbt sources. Staging = ephemeral-light views, marts = tables.
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

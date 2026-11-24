@@ -1,0 +1,213 @@
+# FinSentry central configuration.
+# Everything downstream (data generation, loading, anomaly detection, app) reads
+# from here. No magic numbers scattered across the codebase.
+#
+# Data is SYNTHETIC. The `anomalies` list below is the exact ground truth used
+# for precision/recall of the anomaly detector (Unit 2). `confounders` are
+# legitimate, UNLABELED business variation (holidays, month-end) that a naive
+# detector will mistake for anomalies -> keeps precision < 1 and makes the
+# detection problem non-degenerate.
+
+seed: 42
+
+# --- Date range (inclusive): 365 days of daily finance data ---
+start_date: "2025-01-01"
+end_date: "2025-12-31"
+
+# --- Paths (relative to project root) ---
+paths:
+  raw_dir: "data/raw"
+  duckdb_path: "data/warehouse.duckdb"
+  reports_dir: "reports"
+
+# --- Synthetic data-generation parameters ---
+data_generation:
+  currency: "USD"
+
+  # Granular billing dimensions.
+  services:
+    - compute
+    - storage
+    - database
+    - network
+    - analytics
+  regions:
+    - us-east-1
+    - us-west-2
+    - eu-west-1
+    - ap-south-1
+  # Number of distinct billing accounts drawn from.
+  n_accounts: 25
+  # Line items generated per (service, region) per day.
+  line_items_per_service_region: 3
+
+  # Revenue / billing baseline (USD per day, before trend/seasonality/noise).
+  base_daily_revenue: 100000.0
+  # Fractional linear growth applied across the whole date range (end vs start).
+  annual_trend_growth: 0.15
+  # Multiplicative daily noise on the revenue total. Student-t with a high df is
+  # near-gaussian (light tails) so the noise floor is predictable; the heavy-tail
+  # confounders are injected explicitly via `shock_days` below. The sigma sets
+  # the detector's effective threshold band so subtle anomalies are near it.
+  revenue_noise_sigma: 0.033
+  revenue_noise_df: 60
+  # Weekday multipliers (Mon..Sun), weekends lighter. Removed by a seasonal
+  # detector; kept modest so it is not the dominant signal.
+  weekday_multipliers: [1.08, 1.10, 1.10, 1.08, 1.05, 0.82, 0.80]
+  # Per-service share of daily revenue (must sum to 1.0; order matches services).
+  service_revenue_shares: [0.38, 0.17, 0.22, 0.10, 0.13]
+  # Typical unit price per service (USD); usage_quantity is derived from cost.
+  service_unit_price: [0.085, 0.022, 0.140, 0.011, 0.260]
+
+  # Consumption (usage) baseline (units per day, before trend/seasonality/noise).
+  base_daily_consumption: 500000.0
+  # Applied PER SERVICE (5 services), so the daily-total relative noise is
+  # ~sigma * sqrt(sum(share_i^2)) ~ half of sigma. Set higher so the total-series
+  # noise floor matches the revenue series.
+  consumption_noise_sigma: 0.060
+  consumption_noise_df: 60
+  consumption_annual_trend_growth: 0.22
+  # Base active accounts per service per day (grows mildly over the year).
+  base_active_accounts: 1200
+
+  # Reconciliation: revenue_ledger must match daily SUM(billed_cost) within
+  # tolerance on normal days. recon_jitter_sigma keeps normal days *inside*
+  # tolerance; recon_tolerance_pct is the tested threshold.
+  recon_tolerance_pct: 0.010     # 1.0% of daily billed total
+  recon_jitter_sigma: 0.0015     # ~0.15% GL rounding/timing noise (normal days)
+
+  # --- Tuning knobs (previously hardcoded in generate_data.py) ---
+  # Clip bounds for the multiplicative daily noise draws (guard against extremes).
+  noise_clip: [0.5, 1.5]
+  # Per-service daily share jitter (keeps shares near their base but not static).
+  service_share_jitter_sigma: 0.01
+  service_share_jitter_clip: [0.8, 1.2]
+  # Dirichlet concentration for splitting a service total across regions.
+  region_dirichlet_concentration: 4.0
+  # Dirichlet concentration for splitting a region total across line items.
+  line_item_dirichlet_concentration: 5.0
+  # Per-line-item unit-price jitter and an absolute price floor.
+  unit_price_jitter_sigma: 0.03
+  min_unit_price: 0.001
+  # Active-accounts: mild annual growth and per-row noise.
+  active_accounts_annual_trend_growth: 0.10
+  active_accounts_noise_sigma: 0.02
+
+# --- UNLABELED confounders (legitimate business variation, NOT anomalies) ---
+# These scale the daily revenue (billing) AND consumption totals. Because
+# billing moves, the revenue ledger follows it, so reconciliation still holds
+# (these never create recon breaks). They are deliberately NOT in anomaly_labels
+# so a calendar-unaware detector flags some of them -> false positives.
+confounders:
+  # Two deep holiday dips cross a naive detector's threshold (false positives);
+  # the rest are mild and stay under it (just realistic calendar texture).
+  holidays:
+    - { date: "2025-12-25", factor: 0.66, note: "Christmas Day (deep dip)" }
+    - { date: "2025-11-27", factor: 0.70, note: "US Thanksgiving (deep dip)" }
+    - { date: "2025-07-04", factor: 0.96, note: "US Independence Day (mild)" }
+    - { date: "2025-09-01", factor: 0.96, note: "US Labor Day (mild)" }
+    - { date: "2025-11-28", factor: 0.96, note: "Day after Thanksgiving (mild)" }
+    - { date: "2025-12-26", factor: 0.95, note: "Boxing Day (mild)" }
+  # Multiplier applied to the LAST calendar day of each month (billing push).
+  # Kept small so it sits UNDER the detector threshold (texture, not a false alarm).
+  month_end_bump_factor: 1.02
+  # One-off heavy-tailed shocks (legitimate variation, NOT anomalies). Each hits a
+  # single metric and is large enough to trip a naive detector -> extra false
+  # positives, keeping precision < 1.
+  shock_days:
+    - { date: "2025-06-18", metric: revenue,     factor: 1.17, note: "One-off demand burst (heavy-tail), not an anomaly." }
+    - { date: "2025-10-07", metric: consumption, factor: 0.84, note: "One-off metering wobble (heavy-tail), not an anomaly." }
+
+# --- Ground-truth planted anomalies (exact labels for precision/recall) ---
+# metric: revenue | consumption | reconciliation
+# anomaly_type: spike | drop | outlier | recon_break
+# severity: large (unambiguous) | subtle (near-threshold, genuinely hard)
+# factor: multiplicative effect applied on that date.
+#   revenue/consumption -> scales that day's total.
+#   reconciliation      -> revenue_ledger = billing_sum * factor (break beyond tolerance).
+anomalies:
+  # ---- Large, unambiguous (a good detector should catch these) ----
+  - { date: "2025-02-14", metric: revenue,        anomaly_type: spike,       severity: large,  factor: 1.75, note: "Enterprise annual prepay recognized in a single day." }
+  - { date: "2025-04-07", metric: revenue,        anomaly_type: drop,        severity: large,  factor: 0.45, note: "Regional outage suppressed billed usage." }
+  - { date: "2025-07-22", metric: revenue,        anomaly_type: spike,       severity: large,  factor: 1.80, note: "Price-list migration double-billed several services." }
+  - { date: "2025-10-13", metric: revenue,        anomaly_type: drop,        severity: large,  factor: 0.48, note: "Credits/refunds batch applied, net revenue dropped." }
+  - { date: "2025-03-19", metric: consumption,    anomaly_type: outlier,     severity: large,  factor: 1.70, note: "Batch backfill job inflated consumption units." }
+  - { date: "2025-06-05", metric: consumption,    anomaly_type: outlier,     severity: large,  factor: 0.50, note: "Metering agent outage dropped consumption units." }
+  - { date: "2025-09-23", metric: consumption,    anomaly_type: outlier,     severity: large,  factor: 1.72, note: "Load test traffic counted as real consumption." }
+  - { date: "2025-11-04", metric: consumption,    anomaly_type: outlier,     severity: large,  factor: 0.55, note: "Metering pipeline partial outage dropped units." }
+  - { date: "2025-03-05", metric: revenue,        anomaly_type: spike,       severity: large,  factor: 1.62, note: "Mis-scoped reserved-capacity charge billed in one day." }
+  - { date: "2025-10-22", metric: consumption,    anomaly_type: outlier,     severity: large,  factor: 0.52, note: "Collector crash zeroed a slice of metered usage." }
+  # ---- Subtle, near-threshold (genuinely hard; a detector should miss some) ----
+  - { date: "2025-05-08", metric: revenue,        anomaly_type: spike,       severity: subtle, factor: 1.16, note: "Quiet mid-quarter overbill from a misapplied rate card." }
+  - { date: "2025-01-27", metric: revenue,        anomaly_type: drop,        severity: subtle, factor: 0.86, note: "Minor billing pipeline gap, partially undercounted." }
+  - { date: "2025-09-18", metric: revenue,        anomaly_type: spike,       severity: subtle, factor: 1.05, note: "Small duplicate-charge leak across a few accounts." }
+  - { date: "2025-08-19", metric: consumption,    anomaly_type: outlier,     severity: subtle, factor: 1.15, note: "Modest synthetic-traffic contamination in metering." }
+  - { date: "2025-07-03", metric: consumption,    anomaly_type: outlier,     severity: subtle, factor: 0.92, note: "Slight metering undercount before a holiday." }
+  # ---- Reconciliation breaks (ledger diverges from billing beyond tolerance) ----
+  - { date: "2025-05-20", metric: reconciliation, anomaly_type: recon_break, severity: large,  factor: 1.09, note: "GL posted revenue the billing feed never recorded (+9%)." }
+  - { date: "2025-08-15", metric: reconciliation, anomaly_type: recon_break, severity: large,  factor: 0.92, note: "Late billing feed left GL short of billed cost (-8%)." }
+  - { date: "2025-12-03", metric: reconciliation, anomaly_type: recon_break, severity: large,  factor: 1.12, note: "Manual GL adjustment overstated recognized revenue (+12%)." }
+
+# --- Anomaly detection (Unit 3) ---
+# All detector parameters live here; anomaly.py reads only from this block so the
+# detection run is fully reproducible and has no scattered magic numbers.
+anomaly_detection:
+  # Revenue metric to monitor. We use `total_billed_cost` (the billing series,
+  # source A) rather than `recognized_revenue` (ledger, source B): billed cost is
+  # where real demand/usage anomalies land, while ledger-vs-billing divergence is
+  # a RECONCILIATION problem handled separately by the dbt recon rule. Monitoring
+  # the billed series keeps the two failure classes cleanly separated.
+  revenue_metric_column: "total_billed_cost"
+
+  # Robust median/MAD detector.
+  # Centered rolling-median window used to estimate the slow trend before
+  # day-of-week deseasonalization. 31 is wide enough to ignore single-day spikes
+  # yet track the ~15%/yr growth; it gives precision ~0.65 / recall ~0.87 @3.5.
+  trend_window: 31
+  # Remove the Mon..Sun multiplier via a robust per-weekday factor before scoring.
+  dow_deseasonalize: true
+  # robust z = 0.6745*(x - median)/MAD on the deseasonalized series. |z| above
+  # this is flagged. 3.5 is the classic Iglewicz-Hoaglin outlier cutoff.
+  mad_threshold: 3.5
+
+  # Isolation Forest (sklearn). A multivariate second opinion over a small
+  # reproducible feature set (deseasonalized value, robust z, rolling mean/std,
+  # lag delta, day-of-week). Fit PER METRIC.
+  iforest_n_estimators: 200          # fixed; plenty for 365 points, fully determ.
+  # contamination = expected outlier fraction. Planted metric anomalies are ~2%
+  # of days; 0.03 gives a non-degenerate detector (precision ~0.50, recall ~0.73)
+  # that trades precision for a different false-positive profile than MAD.
+  iforest_contamination: 0.03
+  iforest_seed: 42                   # == global seed; determinism.
+  # Short centered window for the rolling mean/std features fed to the forest.
+  iforest_feature_window: 7
+
+# --- AI analyst agent (Unit 4) ---
+# The analyst is an LLM tool-calling loop over three REAL tools (read-only SQL,
+# the anomaly check, chart rendering). The committed/reproducible numbers (weekly
+# review, number verification, 15-question eval) come from the DETERMINISTIC
+# OFFLINE provider (a rule/intent planner, no API key). Set GROQ_API_KEY (or
+# --provider groq) to run the live Groq chat-completions loop instead; both
+# providers drive the identical loop and the identical tools.
+analyst:
+  # Default provider for reproduce scripts. Selection order:
+  #   explicit --provider {offline,groq}  ->  else GROQ_API_KEY present => groq
+  #   ->  absent => offline.
+  provider: offline
+  # Live path only: a currently-valid Groq model id (OpenAI-compatible tools API).
+  groq_model: "llama-3.3-70b-versatile"
+  # Hard cap on tool-calling iterations per question (loop safety).
+  max_iterations: 6
+  # Deterministic review week (ISO week). 2025-12-01..2025-12-07 is the last full
+  # ISO week before year-end that contains interesting activity: a +12% ($15658.66)
+  # reconciliation break on 2025-12-03. Prior week (for WoW deltas) is derived.
+  review_week_start: "2025-12-01"
+  review_week_end: "2025-12-07"
+  # Fixed run timestamp stamped into committed logs (NO wall-clock) == data end date.
+  run_ts: "2025-12-31"
+  # Number-verification tolerances (verify_numbers.py).
+  tolerances:
+    money_rel: 0.001      # relative tolerance for money / summed floats
+    money_abs: 0.05       # absolute floor (USD) for money comparisons
+    pct_abs: 0.05         # absolute tolerance (percentage points) for % values
+    # counts and dates are matched EXACTLY.

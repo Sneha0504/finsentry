@@ -1,0 +1,42 @@
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# --- Environment / secrets ---
+.env
+
+# --- Data artifacts (regenerated from a fixed seed) ---
+data/warehouse.duckdb
+data/warehouse.duckdb.wal
+data/raw/*.csv
+
+# --- Reports (regenerated) ---
+reports/*
+
+# --- dbt ---
+target/
+logs/
+dbt_packages/
+.user.yml
+
+# --- Keep directory placeholders ---
+!data/raw/.gitkeep
+!reports/.gitkeep
+
+# --- Committed figures (promoted from a real run by `make figures`) ---
+# reports/* is regenerated and ignored above, but the README renders these on
+# GitHub, so the four headline PNGs are tracked under assets/.
+!assets/
+!assets/*.png
+
+# --- OS / editor ---
+.DS_Store
+.vscode/
+.idea/

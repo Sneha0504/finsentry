@@ -1,0 +1,226 @@
+# Adversarial / held-out probe questions.
+#
+# These reword, re-filter, or re-dimension the core questions to exercise the
+# OFFLINE PLANNER'S fail-closed gate: a handler may answer only if it accounts for
+# ALL salient qualifiers (superlatives, period/calendar filters, set operations,
+# per-X breakdowns, comparative thresholds); otherwise the planner must DECLINE
+# ("UNSUPPORTED: ...") rather than emit a confident wrong total. Each probe asserts
+# the analyst is correct-or-declined. Results appear in the eval's
+# "Scope, limitations & failure cases" section.
+#
+# expect:
+#   decline  - the answer must start with "UNSUPPORTED:"
+#   value    - a shape the planner supports; graded like a core question.
+
+probes:
+  # ---- Shapes the planner now handles CORRECTLY (reword/filter it supports) ----
+  - id: p01
+    question: "What was the total billed cost for the storage service?"
+    expect: value
+    match: money
+    expected: 6716194.27
+    tolerance: 0.001
+    note: "Per-service total (fct_service_daily) - must not return the all-services total."
+  - id: p02
+    question: "How many reconciliation breaks were under 10%?"
+    expect: value
+    match: count
+    expected: 2
+    note: "Directional threshold (< 10%) - must apply the filter, not return 3."
+  - id: p03
+    question: "What was the date of peak revenue?"
+    expect: value
+    match: date
+    expected: "2025-07-22"
+    note: "'peak' = highest -> highest-revenue DAY (a date, not a total)."
+  - id: p04
+    question: "Which day had the highest consumption units?"
+    expect: value
+    match: date
+    expected: "2025-09-23"
+    note: "Highest-consumption day (date)."
+  - id: p05
+    question: "What was the lowest monthly billed cost?"
+    expect: value
+    match: categorical
+    expected: "2025-02"
+    note: "Monthly MIN (generalised month handler)."
+  - id: p06
+    question: "Which service had the lowest total billed cost?"
+    expect: value
+    match: categorical
+    expected: "network"
+    note: "Service MIN (generalised service handler)."
+  - id: p07
+    question: "How many reconciliation breaks were at least 9%?"
+    expect: value
+    match: count
+    expected: 2
+    note: ">= operator parsed from 'at least' (8% and 9% -> wait: 9% and 12% = 2)."
+  - id: p08
+    question: "How many reconciliation breaks were below 8.5%?"
+    expect: value
+    match: count
+    expected: 1
+    note: "< 8.5% uses the actual 8.5 from the text (only the 8% break), not a rounded 8%."
+  - id: p09
+    question: "What was the total billed cost for the database service in Q3 2025?"
+    expect: value
+    match: money
+    expected: 2245858.34
+    tolerance: 0.001
+    note: "Per-service total + period filter, both applied."
+  - id: p10
+    question: "What was the lowest consumption day in March 2025?"
+    expect: value
+    match: date
+    expected: "2025-03-02"
+    note: "Metric extreme-day + period, both applied."
+
+  # ---- Shapes the planner CANNOT answer -> must DECLINE (never a wrong total) ----
+  - id: p11
+    question: "What was the billed cost on weekends?"
+    expect: decline
+    note: "Calendar filter (weekend) not supported."
+  - id: p12
+    question: "What was the billed cost excluding compute?"
+    expect: decline
+    note: "Set operation (excluding) not supported."
+  - id: p13
+    question: "How many revenue anomalies were there in December 2025?"
+    expect: decline
+    note: "The detector runs over the whole series; it cannot filter anomalies by period -> decline, not 14."
+  - id: p14
+    question: "Which weekday has the most billed cost?"
+    expect: decline
+    note: "Weekday grouping not supported."
+  - id: p15
+    question: "What was the average billed cost per service?"
+    expect: decline
+    note: "Per-service breakdown (per_x) not supported."
+  - id: p16
+    question: "What was the 95th percentile of daily revenue?"
+    expect: decline
+    note: "Order statistics (percentile) not supported."
+  - id: p17
+    question: "Which quarter had the highest billed cost?"
+    expect: decline
+    note: "Quarter grouping not supported."
+  - id: p18
+    question: "Show me billed cost broken down by region."
+    expect: decline
+    note: "Region dimension not exposed in an analyst-queryable mart."
+
+  # ---- Round-4 held-out set: positive-gate / period-phrasing / cross-subject ----
+  - id: p19
+    question: "What was the total billed cost for analytics?"
+    expect: value
+    match: money
+    expected: 5138630.85
+    tolerance: 0.001
+    note: "Bare service name (no 'service' word) with a supported aggregate -> answered, not the all-services total."
+  - id: p20
+    question: "How many reconciliation breaks were 9% or more?"
+    expect: value
+    match: count
+    expected: 2
+    note: "'or more' -> >= operator (9% and 12%)."
+  - id: p21
+    question: "How many reconciliation breaks were at most 10%?"
+    expect: value
+    match: count
+    expected: 2
+    note: "'at most' -> <= operator (8% and 9%; the 12% break is excluded). 10% avoids the float boundary at 9%."
+  - id: p22
+    question: "What was the billed cost in the second half of 2025?"
+    expect: decline
+    note: "'second half' is a relative range the parser does not parse exactly."
+  - id: p23
+    question: "What was the billed cost before July 2025?"
+    expect: decline
+    note: "'before' range not parsed -> decline (not 'in July')."
+  - id: p24
+    question: "What was the billed cost since 2025-10-01?"
+    expect: decline
+    note: "'since' open range not parsed -> decline (not a single day)."
+  - id: p25
+    question: "What was the YTD billed cost through September?"
+    expect: decline
+    note: "YTD / 'through' not parsed -> decline (not September only)."
+  - id: p26
+    question: "What was the billed cost from January to December?"
+    expect: decline
+    note: "'from X to Y' range -> decline (not the January total)."
+  - id: p27
+    question: "What was the average consumption per active account?"
+    expect: decline
+    note: "'per active account' is an unsupported per-X metric."
+  - id: p28
+    question: "What was the second highest revenue day?"
+    expect: decline
+    note: "Nth-highest is unsupported ('second' is an unrecognized term)."
+  - id: p29
+    question: "What was the billed cost on Mondays?"
+    expect: decline
+    note: "Weekday filter unsupported ('mondays' unrecognized)."
+  - id: p30
+    question: "What was the total billed cost for compute and storage combined?"
+    expect: decline
+    note: "Set combination ('combined') unsupported."
+  - id: p31
+    question: "How many reconciliation breaks exceeded $10000?"
+    expect: decline
+    note: "Dollar-valued threshold on a %-based field -> unrecognized '$10000' -> decline."
+  - id: p32
+    question: "How many anomalies occurred on days with recon breaks?"
+    expect: decline
+    note: "Cross-subject (anomalies filtered by reconciliation-break days) unsupported."
+  - id: p33
+    question: "What was the revenue growth from Q1 to Q4?"
+    expect: decline
+    note: "Growth/delta across two periods unsupported."
+
+  # ---- Round-5 held-out: extreme-day cross-conditions (a value/count ON an
+  #      extreme day) and mixed subjects. All must DECLINE (no bypass). ----
+  - id: p34
+    question: "How many anomalies happened on the highest revenue day?"
+    expect: decline
+    note: "Count conditioned on an extreme day -> decline (true answer 1, but unsupported shape)."
+  - id: p35
+    question: "How many reconciliation breaks occurred on the lowest revenue day?"
+    expect: decline
+    note: "Count conditioned on an extreme day -> decline."
+  - id: p36
+    question: "What was consumption on the highest revenue day?"
+    expect: decline
+    note: "A different metric (consumption) conditioned on the highest-revenue day -> decline, never flip to highest consumption."
+  - id: p37
+    question: "Which service had the highest billed cost on the lowest revenue day?"
+    expect: decline
+    note: "Service ranking conditioned on an extreme day -> decline (never flip direction)."
+  - id: p38
+    question: "What was recognized revenue on the highest revenue day?"
+    expect: decline
+    note: "Recognized revenue conditioned on the highest billed day -> decline (don't return billed cost)."
+  - id: p39
+    question: "How many anomaly days had the highest revenue?"
+    expect: decline
+    note: "Mixed subject (anomaly days + revenue superlative) -> decline, not a date."
+  - id: p40
+    question: "Was the highest revenue day flagged as an anomaly?"
+    expect: decline
+    note: "Yes/no cross-subject question -> decline."
+
+  # ---- Round-6 held-out: multi-superlative conjunctions + service-conditioned ----
+  - id: p41
+    question: "Which day had the highest revenue and the most active accounts?"
+    expect: decline
+    note: "Two extremes at once (revenue + active accounts) - no single day verified to satisfy both -> decline."
+  - id: p42
+    question: "Which day had the highest consumption and the most active accounts?"
+    expect: decline
+    note: "Two extremes at once (consumption + active accounts) -> decline."
+  - id: p43
+    question: "On the day compute billed the most, what was total revenue?"
+    expect: decline
+    note: "A value conditioned on a per-service extreme day -> decline (never drop the service name)."

@@ -1,0 +1,108 @@
+version: 2
+
+models:
+  - name: dim_date
+    description: "Date spine over the full data range. One row per calendar day."
+    columns:
+      - name: date
+        data_tests:
+          - unique
+          - not_null
+
+  - name: fct_daily_revenue
+    description: "Daily revenue reconciliation fact (billing vs ledger). One row per day."
+    columns:
+      - name: date
+        description: "Daily grain key."
+        data_tests:
+          - unique
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date
+      - name: total_billed_cost
+        data_tests: [not_null]
+      - name: recognized_revenue
+        data_tests: [not_null]
+      - name: recon_abs_diff
+        data_tests: [not_null]
+      - name: recon_pct_diff
+        data_tests: [not_null]
+      - name: billing_present
+        description: "False if this day is missing from the billing source (A). Surfaces a missing-source DQ failure."
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+              quote: false
+      - name: ledger_present
+        description: "False if this day is missing from the revenue ledger source (B)."
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+              quote: false
+
+  - name: fct_daily_consumption
+    description: "Daily consumption rollup. One row per day."
+    columns:
+      - name: date
+        data_tests:
+          - unique
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date
+      - name: total_consumption_units
+        data_tests: [not_null]
+      - name: total_active_accounts
+        data_tests: [not_null]
+
+  - name: fct_service_daily
+    description: "Service-level daily billing + consumption. Grain: (date, service)."
+    columns:
+      - name: service_day_key
+        description: "Surrogate key date|service for grain uniqueness."
+        data_tests:
+          - unique
+          - not_null
+      - name: date
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date
+      - name: service
+        description: "Referential integrity: every consumption/service here must exist in billing services."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_billing_line_items')
+              field: service
+      - name: billed_cost
+        data_tests: [not_null]
+      - name: consumption_units
+        data_tests: [not_null]
+
+  - name: mart_daily_health
+    description: "Daily health join: revenue + consumption + recon_breach flag (var-driven tolerance)."
+    columns:
+      - name: date
+        data_tests:
+          - unique
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date
+      - name: total_billed_cost
+        description: "NULL only if a day is missing from BOTH billing and ledger (no fct_daily_revenue row). not_null surfaces a fully-missing day."
+        data_tests: [not_null]
+      - name: total_consumption_units
+        description: "NULL only if a day is missing from the consumption source entirely. not_null surfaces a fully-missing day."
+        data_tests: [not_null]
+      - name: recon_breach
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+              quote: false

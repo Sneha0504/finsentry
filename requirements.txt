@@ -1,0 +1,39 @@
+# FinSentry core requirements (pinned, mutually compatible).
+# Python 3.11+ (developed/tested on CPython 3.12). Runs locally on DuckDB.
+# Airflow is intentionally NOT here (heavy, needs constraint file) -> requirements-airflow.txt
+#
+# dbt pins: dbt-core 1.8.x pairs with dbt-duckdb 1.8.x.
+# numpy pinned to 1.26.x for a conservative, broadly-compatible scientific stack.
+
+# --- Warehouse / transformation ---
+duckdb==1.1.3
+dbt-core==1.8.7
+dbt-duckdb==1.8.4
+
+# --- Scientific stack ---
+pandas==2.2.3
+numpy==1.26.4
+scikit-learn==1.5.2
+scipy==1.13.1
+matplotlib==3.9.2
+
+# --- Config / IO ---
+pyyaml==6.0.2
+python-dotenv==1.0.1
+tabulate==0.9.0
+
+# --- App / viz ---
+streamlit==1.39.0
+plotly==5.24.1
+# pyarrow is a streamlit dependency; pin it explicitly because the latest pyarrow
+# (>=18) requires numpy>=2.0, which conflicts with our pinned numpy==1.26.4 and
+# breaks st.dataframe/st.table rendering ("pyarrow requires NumPy 2.0 or newer").
+# 17.0.0 supports numpy 1.26 and satisfies streamlit's pyarrow>=7.0.
+pyarrow==17.0.0
+
+# --- LLM analyst (Groq free tier; offline mode needs no key) ---
+groq==0.11.0
+# httpx pinned <0.28: groq 0.11.0's http client passes `proxies=` to httpx, which
+# httpx 0.28 removed. Without this pin the live Groq client fails to construct
+# (the offline analyst still works, and selection degrades gracefully).
+httpx==0.27.2

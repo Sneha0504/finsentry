@@ -1,0 +1,18 @@
+# FinSentry orchestration (optional) requirements.
+# Airflow is heavy and needs its official constraints file to resolve cleanly.
+# The one-command local repro does NOT require Airflow; a plain Python runner
+# executes the identical steps. Airflow is the deploy target only.
+#
+# Install (Python 3.11):
+#   pip install -r requirements-airflow.txt \
+#     --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.9.3/constraints-3.11.txt"
+#
+# (On Python 3.12 use constraints-3.12.txt; Airflow 2.9.3 supports 3.8-3.12.)
+#
+# IMPORTANT: Airflow 2.9.3's constraints pin DIFFERENT pandas/numpy versions than
+# core requirements.txt (e.g. different pandas, and numpy that may conflict with
+# the pins here). Do NOT install this into the same environment as
+# requirements.txt. Run Airflow in its own virtualenv / Docker container; the
+# local one-command repro uses the plain Python runner and never needs Airflow.
+
+apache-airflow==2.9.3

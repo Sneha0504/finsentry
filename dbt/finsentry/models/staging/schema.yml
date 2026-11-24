@@ -1,0 +1,83 @@
+version: 2
+
+models:
+  - name: stg_billing_line_items
+    description: "Typed, one-to-one staging view over raw.billing_line_items (source A)."
+    columns:
+      - name: line_item_key
+        description: "Surrogate natural key: billing_date|service|region|resource_id."
+        data_tests:
+          - unique
+          - not_null
+      - name: billing_date
+        data_tests: [not_null]
+      - name: service
+        data_tests: [not_null]
+      - name: region
+        data_tests: [not_null]
+      - name: resource_id
+        data_tests: [not_null]
+      - name: usage_quantity
+        data_tests: [not_null]
+      - name: unit_price
+        data_tests: [not_null]
+      - name: billed_cost
+        data_tests: [not_null]
+      - name: currency
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['USD']
+
+  - name: stg_revenue_ledger
+    description: "Typed, one-to-one staging view over raw.revenue_ledger (source B)."
+    columns:
+      - name: ledger_key
+        description: "Surrogate natural key: ledger_date|product_line."
+        data_tests:
+          - unique
+          - not_null
+      - name: ledger_date
+        data_tests: [not_null]
+      - name: product_line
+        data_tests: [not_null]
+      - name: recognized_revenue
+        data_tests: [not_null]
+      - name: currency
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['USD']
+
+  - name: stg_consumption
+    description: "Typed, one-to-one staging view over raw.consumption."
+    columns:
+      - name: consumption_key
+        description: "Surrogate natural key: usage_date|service."
+        data_tests:
+          - unique
+          - not_null
+      - name: usage_date
+        data_tests: [not_null]
+      - name: service
+        data_tests: [not_null]
+      - name: consumption_units
+        data_tests: [not_null]
+      - name: active_accounts
+        data_tests: [not_null]
+
+  - name: stg_anomaly_labels
+    description: "Typed staging view over raw.anomaly_labels (ground truth)."
+    columns:
+      - name: anomaly_date
+        data_tests: [not_null]
+      - name: metric
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['revenue', 'consumption', 'reconciliation']
+      - name: anomaly_type
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['spike', 'drop', 'outlier', 'recon_break']
