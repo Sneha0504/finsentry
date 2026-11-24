@@ -58,7 +58,7 @@ guide + Streamlit-in-Snowflake port). Author: **Sneha Mishra**
 - **Reproduce path (this repo):** `finsentry.pipeline_runner` — 8 stages, no Docker,
   no credentials, one command.
 - **Deploy path:** Airflow DAG (`airflow/`) orchestrates the identical stages;
-  **DuckDB** is swapped for **Snowflake** (`snowflake/ddl.sql` + `snowflake/DEPLOY.md`).
+ 
 
 ---
 
