@@ -194,8 +194,12 @@ analyst:
   #   explicit --provider {offline,groq}  ->  else GROQ_API_KEY present => groq
   #   ->  absent => offline.
   provider: offline
-  # Live path only: a currently-valid Groq model id (OpenAI-compatible tools API).
-  groq_model: "llama-3.3-70b-versatile"
+  # Live path only: a currently-valid Groq CHAT model id (OpenAI-compatible tools
+  # API). Other options valid for this account: "openai/gpt-oss-120b" (higher
+  # quality) and "qwen/qwen3.8-27b". Groq's catalog changes over time, so a model
+  # id can start returning 404 model_not_found; if that happens, pick a current id
+  # from `console.groq.com/docs/models` or `client.models.list()` and update this.
+  groq_model: "openai/gpt-oss-20b"
   # Hard cap on tool-calling iterations per question (loop safety).
   max_iterations: 6
   # Deterministic review week (ISO week). 2025-12-01..2025-12-07 is the last full

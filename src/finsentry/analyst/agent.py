@@ -43,6 +43,7 @@ class AgentResult:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     tool_results: list[dict[str, Any]] = field(default_factory=list)
     messages: list[dict[str, Any]] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
     @property
     def tools_used(self) -> list[str]:
@@ -102,6 +103,7 @@ def run_agent(
     ]
     tool_logs: list[dict[str, Any]] = []
     tool_results: list[dict[str, Any]] = []
+    notes: list[str] = []
     iterations = 0
 
     it = 0
@@ -111,6 +113,16 @@ def run_agent(
             turn: AssistantTurn = prov.complete(messages, tools)
         except Exception as exc:  # live-provider failure -> graceful degradation
             if getattr(prov, "name", "") == "groq":
+                # Degrade gracefully, but NOT silently: record a clear reason so the
+                # caller (and the tool-call log) shows why the live loop fell back.
+                reason = (
+                    f"groq tool-loop failed on '{run_id}': {type(exc).__name__}: {exc} "
+                    f"-> degraded to offline provider for this question"
+                )
+                notes.append(reason)
+                print("  [agent] " + reason, flush=True)
+                if logger is not None:
+                    logger.log({"run_id": run_id, "event": "provider_degrade", "reason": reason})
                 prov = OfflineProvider(cfg)
                 messages = [
                     {"role": "system", "content": SYSTEM_PROMPT},
@@ -159,6 +171,7 @@ def run_agent(
             tool_calls=tool_logs,
             tool_results=tool_results,
             messages=messages,
+            notes=notes,
         )
 
     return AgentResult(
@@ -169,4 +182,5 @@ def run_agent(
         tool_calls=tool_logs,
         tool_results=tool_results,
         messages=messages,
+        notes=notes,
     )
