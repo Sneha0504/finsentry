@@ -4,8 +4,7 @@
 source systems, and writes a number-verified weekly business review — with an AI
 analyst that answers questions or declines rather than guess.**
 
-Runs locally on **DuckDB** with one command; **Snowflake-ready** (DDL + deploy
-guide + Streamlit-in-Snowflake port). Author: **Sneha Mishra**
+Runs locally on **DuckDB** with one command
 ([@Sneha0504](https://github.com/Sneha0504)).
 
 ---
