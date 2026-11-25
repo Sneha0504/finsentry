@@ -17,10 +17,15 @@ Two honest render modes (``verify_numbers.py`` guards both):
   it to its claim id, so verification can confirm each prose number matches the
   re-queried value for THAT specific claim (not just "some" claim).
 * **groq provider (opt-in):** the Groq model **writes the narrative prose itself**
-  from the same grounded facts (the real "AI analyst writes the review"). No
-  markers (free text); ``verify_numbers.py`` falls back to exact-string
-  presence/coverage. Any shape/empty/error in the live path degrades cleanly to
-  the offline template - it never crashes.
+  from the same grounded facts (the real "AI analyst writes the review"). The
+  model writes free text; the hidden ``<!--c:ID-->`` markers are then re-attached
+  DETERMINISTICALLY by exact-number matching (:func:`_reattach_markers`) so a valid
+  narrative is verified in the SAME marker-bound mode as offline (``groq-markerbound``).
+  The re-attach never fabricates - it only marks a number the model actually wrote
+  that exactly equals the claim value, and requires EVERY claim's number to be
+  present with no ungrounded numbers left over, else it FAILS CLOSED. Any
+  empty/error/unbindable live path degrades cleanly to the offline template with a
+  SPECIFIC, surfaced reason - it is never silent and it never crashes.
 
 Grounded numbers always come from tool results; a malformed/empty tool result is
 back-filled from a direct independent query (producer-side safety net) so the
@@ -45,6 +50,7 @@ import duckdb
 from finsentry.analyst.agent import JsonlLogger, run_agent
 from finsentry.analyst.llm import select_provider
 from finsentry.analyst.planner import fmt_int, fmt_money, fmt_num
+from finsentry.analyst.verify_numbers import _BOUND_RE, _DATE_RE, _MARKER_RE, _NUM_RE
 from finsentry.config import Config, load_config
 
 
@@ -94,11 +100,14 @@ def _direct_week_values(cfg: Config, wss: str, wes: str, pss: str, pes: str) -> 
 # --------------------------------------------------------------------------- #
 # Groq free-text narrative (opt-in; degrades cleanly)
 # --------------------------------------------------------------------------- #
-def _groq_narrative(provider: Any, facts: str) -> str | None:
+def _groq_narrative(provider: Any, facts: str) -> tuple[str | None, str | None]:
     """Ask the Groq model to write the review prose from grounded facts.
 
-    Returns the prose, or ``None`` on any error/empty response so the caller can
-    fall back to the deterministic offline template.
+    Returns ``(prose, None)`` on success, or ``(None, reason)`` when the live call
+    errors or returns an empty response. The ``reason`` string is surfaced by the
+    caller (never swallowed) so a degrade is visible, not silent. Marker binding is
+    NOT required of the model here: :func:`_reattach_markers` re-attaches the hidden
+    claim markers deterministically from the exact grounded number strings.
     """
     try:
         resp = provider.client.chat.completions.create(
@@ -108,13 +117,12 @@ def _groq_narrative(provider: Any, facts: str) -> str | None:
                     "role": "system",
                     "content": (
                         "You are a finance analyst writing a weekly business review. Use ONLY "
-                        "the facts provided - do not invent any number. Write 2-4 short "
-                        "paragraphs covering revenue vs prior week, consumption and active "
-                        "accounts, reconciliation status, and anomalies. Keep every figure "
-                        "EXACTLY as given (same digits, $ and % formatting). CRITICAL: "
-                        "immediately after EACH number, copy its claim marker exactly as shown "
-                        "in the facts (e.g. write `$809222.86<!--c:rev_week-->`). Do not include "
-                        "any number that does not have a marker, and do not alter a marker."
+                        "the facts provided - do not invent, round, or reformat any number. "
+                        "Write 2-4 short paragraphs covering revenue vs prior week, consumption "
+                        "and active accounts, reconciliation status, and anomalies. State EVERY "
+                        "figure from the facts, each EXACTLY as given (same digits, and the same "
+                        "$, +, and % characters). Do not write any number that is not one of the "
+                        "given facts, and do not combine or recompute figures."
                     ),
                 },
                 {"role": "user", "content": facts},
@@ -125,11 +133,76 @@ def _groq_narrative(provider: Any, facts: str) -> str | None:
         )
         text = resp.choices[0].message.content
         if not (isinstance(text, str) and text.strip()):
-            return None
-        # Fail closed: a groq review with no markers cannot be verified -> reject it.
-        return text if "<!--c:" in text else None
-    except Exception:
-        return None
+            return None, "groq narrative returned an empty response -> fell back to offline template"
+        return text, None
+    except Exception as exc:
+        return None, (
+            f"groq narrative failed: {type(exc).__name__}: {exc} "
+            f"-> fell back to offline template"
+        )
+
+
+def _reattach_markers(prose: str, claims: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    """Deterministically re-bind a free-text Groq narrative to its claims.
+
+    For each claim, find its EXACT expected number string (``text_value``) as a
+    whole token in the model's prose and insert the hidden ``<!--c:ID-->`` marker
+    immediately after each occurrence. This NEVER fabricates: a marker is attached
+    only to a number the model actually wrote that exactly equals the claim value.
+
+    Accept (return ``(marked_prose, None)``) only if, using the SAME rules
+    :mod:`verify_numbers` enforces, EVERY claim's exact number string was present
+    and marked AND no leftover unmarked digit-form number or ISO date remains.
+    Otherwise FAIL CLOSED: return ``(None, reason)`` so the caller degrades to the
+    offline template with a surfaced reason (a missing claim number, a number the
+    model wrote differently, or an ungrounded extra number all fail here).
+    """
+    marked = prose
+    # Mark longest values first so a short value (e.g. a count "1") can never be
+    # inserted inside a longer number (e.g. "$15658.66") - the boundary guards
+    # below also enforce this, belt-and-braces.
+    for c in sorted(claims, key=lambda c: len(str(c["text_value"])), reverse=True):
+        cid, value = c["id"], str(c["text_value"])
+        # Whole-number-token match only: not preceded by a digit/.,/$/+/-/% and not
+        # continued by a digit (or .d / ,d) or %, and not already carrying a marker.
+        pat = re.compile(
+            r"(?<![\d.,$+%\-])" + re.escape(value) + r"(?!\d)(?!\.\d)(?!,\d)(?!%)(?!<!--c:)"
+        )
+        marked = pat.sub(lambda m: m.group(0) + f"<!--c:{cid}-->", marked)
+
+    # --- Validate with verify_numbers' OWN rules (reuse, stay aligned) ---
+    claims_by_id = {c["id"]: c for c in claims}
+    bound = _BOUND_RE.findall(marked)
+    bound_ids = set()
+    bad_bindings: list[str] = []
+    for token, cid in bound:
+        if cid not in claims_by_id:
+            bad_bindings.append(f"c:{cid} (unknown claim)")
+            continue
+        if token != claims_by_id[cid]["text_value"]:
+            bad_bindings.append(f"c:{cid} ('{token}' != '{claims_by_id[cid]['text_value']}')")
+            continue
+        bound_ids.add(cid)
+
+    missing = [c["id"] for c in claims if c["id"] not in bound_ids]
+
+    # Coverage: strip bound tokens + any markers; no bare number/date may remain.
+    stripped = _MARKER_RE.sub(" ", _BOUND_RE.sub(" ", marked))
+    leftover = _DATE_RE.findall(stripped)
+    leftover += _NUM_RE.findall(_DATE_RE.sub(" ", stripped))
+
+    if missing or bad_bindings or leftover:
+        bits: list[str] = []
+        if missing:
+            bits.append(f"{len(missing)} claim number(s) missing/changed by the model: {', '.join(missing)}")
+        if bad_bindings:
+            bits.append(f"bad binding(s): {', '.join(bad_bindings)}")
+        if leftover:
+            bits.append(f"ungrounded number(s) in prose: {', '.join(sorted(set(leftover)))}")
+        return None, (
+            "groq narrative could not be marker-bound (" + "; ".join(bits) + ") -> fell back to offline template"
+        )
+    return marked, None
 
 
 def build_review(
@@ -171,6 +244,10 @@ def build_review(
     r_acct = ask(f"What was the average daily active accounts between {wss} and {wes}?", "wr_active_week")
     r_recon = ask(f"List reconciliation breaks between {wss} and {wes}.", "wr_recon_list")
     r_anom = ask("How many anomalies did the anomaly detector flag?", "wr_anomaly")
+
+    # Surface (never swallow) any mid-loop groq degrade from the tool-calling path.
+    for r in (r_rev, r_rev_p, r_rec, r_cons, r_cons_p, r_acct, r_recon, r_anom):
+        notes.extend(getattr(r, "notes", []) or [])
 
     # Primary: real tool-result values. Safety net: direct query for any that are
     # missing/malformed (keeps the manifest grounded, never crashes on shape).
@@ -246,14 +323,24 @@ def build_review(
     render_mode = "offline-template"
     groq_prose: str | None = None
     if resolved == "groq":
-        # The groq prompt REQUIRES the model to emit the same <!--c:ID--> markers,
-        # so the free-text review is verified in the SAME marker-bound mode as
-        # offline. A review with no markers is rejected -> offline fallback.
-        groq_prose = _groq_narrative(provider, _facts_block(tv, recon_break_date))
-        if groq_prose is not None:
-            render_mode = "groq-markerbound"
+        # The Groq model writes the narrative prose itself; we then re-attach the
+        # hidden <!--c:ID--> markers DETERMINISTICALLY by exact-number matching, so
+        # a valid free-text review reaches the SAME marker-bound verification as the
+        # offline template. Every failure mode degrades to the offline template with
+        # a SPECIFIC, surfaced reason (never silent).
+        raw_prose, reason = _groq_narrative(provider, _facts_block(tv, recon_break_date))
+        if raw_prose is None:
+            notes.append(reason)
+            if verbose:
+                print("  [groq] " + reason, flush=True)
         else:
-            notes.append("groq narrative unavailable/unmarked -> fell back to the offline template")
+            groq_prose, reattach_reason = _reattach_markers(raw_prose, claims)
+            if groq_prose is not None:
+                render_mode = "groq-markerbound"
+            else:
+                notes.append(reattach_reason)
+                if verbose:
+                    print("  [groq] " + reattach_reason, flush=True)
 
     def m(cid: str) -> str:
         """Value text followed by its hidden claim marker."""
@@ -284,7 +371,10 @@ def build_review(
     # Record the deterministic claim-id sequence in DOCUMENT order (offline only,
     # where the producer controls the whole document) so verification can detect a
     # value-and-marker pair swap that keeps each pair internally consistent. The
-    # groq narrative orders prose freely -> no order check (binding catches swaps).
+    # groq narrative orders prose freely -> no order check here. Note: binding
+    # verifies each number's VALUE equals its claim, not its placement, so a swap
+    # of two correctly-valued claims in free prose is NOT caught (see README
+    # limitations); the offline template path is the fully order-checked one.
     # Number-bound markers only (same pattern verify_numbers uses), so an unrelated
     # comment is never counted.
     _BOUND = r"(?:\$?[+-]?\d[\d,]*(?:\.\d+)?%?|\d{4}-\d{2}-\d{2})<!--c:(\w+)-->"
@@ -337,16 +427,16 @@ _FACT_LABELS = {
 
 
 def _facts_block(tv: dict[str, str], recon_break_date: str | None) -> str:
-    """Grounded facts + the exact marked form to copy, handed to the Groq model."""
+    """Grounded facts handed to the Groq model (exact number strings to copy)."""
     lines = [
-        "Grounded facts for the weekly review. Each fact lists its label, its exact",
-        "value, and the EXACT marked text you must copy verbatim wherever you state",
-        "that number (value immediately followed by its <!--c:ID--> marker):",
+        "Grounded facts for the weekly review. Each fact lists its label and its",
+        "exact value. State every fact, copying each value EXACTLY as written here",
+        "(same digits and the same $, +, and % characters - do not reformat):",
         "",
     ]
     for cid, value in tv.items():
         label = _FACT_LABELS.get(cid, cid)
-        lines.append(f"- {label}: value={value}  -> copy verbatim: {value}<!--c:{cid}-->")
+        lines.append(f"- {label}: {value}")
     return "\n".join(lines)
 
 

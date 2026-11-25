@@ -181,7 +181,7 @@ def select_provider(
 
     if want == "groq":
         api_key = os.environ.get("GROQ_API_KEY")
-        model = str(cfg.raw.get("analyst", {}).get("groq_model", "llama-3.3-70b-versatile"))
+        model = str(cfg.raw.get("analyst", {}).get("groq_model", "openai/gpt-oss-20b"))
         if not api_key:
             notes.append("GROQ_API_KEY not set -> degraded to offline provider")
             if verbose:
